@@ -2,6 +2,9 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
+import os
+from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     # Create the launch description
@@ -53,6 +56,26 @@ def generate_launch_description():
         default_value='true',
         description='Enable visualization node'))
 
+    ld.add_action(DeclareLaunchArgument(
+        'camera_topic',
+        default_value='/image_rect',
+        description='Camera image topic'))
+
+    ld.add_action(DeclareLaunchArgument(
+        'camera_info_topic',
+        default_value='/camera_info',
+        description='Camera info topic'))
+
+    ld.add_action(DeclareLaunchArgument(
+        'tag_family',
+        default_value='36h11',
+        description='AprilTag family'))
+
+    ld.add_action(DeclareLaunchArgument(
+        'tag_size',
+        default_value='0.173',
+        description='AprilTag size in meters'))
+
     # Get launch configuration values
     following_enabled = LaunchConfiguration('following_enabled')
     target_altitude = LaunchConfiguration('target_altitude')
@@ -63,13 +86,38 @@ def generate_launch_description():
     deadband_pixels = LaunchConfiguration('deadband_pixels')
     target_tag_id = LaunchConfiguration('target_tag_id')
     enable_visualization = LaunchConfiguration('enable_visualization')
+    camera_topic = LaunchConfiguration('camera_topic')
+    camera_info_topic = LaunchConfiguration('camera_info_topic')
+    tag_family = LaunchConfiguration('tag_family')
+    tag_size = LaunchConfiguration('tag_size')
+
+    # AprilTag Detection Node (apriltag_ros)
+    # Note: Running in global namespace (no namespace parameter) to match CM4 approach
+    apriltag_node = Node(
+        package='apriltag_ros',
+        executable='apriltag_node',
+        name='apriltag_node',
+        output='screen',
+        remappings=[
+            ('image_rect', camera_topic),
+            ('camera_info', camera_info_topic),
+            ('detections', '/detections'),
+        ],
+        parameters=[{
+            'image_transport': 'raw',
+            'tag_family': tag_family,
+            'tag_size': tag_size,
+        }]
+    )
+    ld.add_action(apriltag_node)
 
     # AprilTag Follower Node
+    # Note: Running in global namespace to match CM4 approach
+    # Subscribes to /detections (published by apriltag_node above)
     apriltag_follower_node = Node(
         package='dexi_apriltag',
         executable='apriltag_follower',
         name='apriltag_follower',
-        namespace='dexi',
         output='screen',
         parameters=[{
             'following_enabled': following_enabled,
@@ -85,25 +133,16 @@ def generate_launch_description():
     ld.add_action(apriltag_follower_node)
 
     # AprilTag Visualizer Node (optional)
+    # Note: Subscribes to /apriltag_detections (hardcoded in C++ code)
+    # This doesn't match the /detections topic from apriltag_node, so we need a remap
     apriltag_visualizer_node = Node(
         package='dexi_apriltag',
         executable='apriltag_visualizer',
         name='apriltag_visualizer',
-        namespace='dexi',
         output='screen',
-        parameters=[{
-            'publish_raw': False,          # Don't publish raw to save bandwidth
-            'publish_compressed': True,     # Publish compressed for web viewing
-        }]
-    )
-    # Only add if visualization is enabled
-    from launch.conditions import IfCondition
-    apriltag_visualizer_node = Node(
-        package='dexi_apriltag',
-        executable='apriltag_visualizer',
-        name='apriltag_visualizer',
-        namespace='dexi',
-        output='screen',
+        remappings=[
+            ('/apriltag_detections', '/detections'),
+        ],
         parameters=[{
             'publish_raw': False,
             'publish_compressed': True,
